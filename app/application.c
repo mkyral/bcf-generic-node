@@ -23,12 +23,12 @@
 #define CO2_PUB_VALUE_CHANGE 50.0f
 
 #if MODULE_POWER
-#define MAX_PAGE_INDEX 3
 #define CO2_UPDATE_INTERVAL (15 * 1000)
 #else
-#define MAX_PAGE_INDEX 2
 #define CO2_UPDATE_INTERVAL (1 * 60 * 1000)
 #endif
+
+#define MAX_PAGE_INDEX 3
 
 bc_led_t led;
 bool led_state = false;
@@ -66,6 +66,7 @@ static const struct
 
 static int page_index = 0;
 static int menu_item = 0;
+char msg_buffer[14] = "BigClown";
 
 static struct
 {
@@ -74,9 +75,9 @@ static struct
 
 } lcd;
 
-#if MODULE_POWER
 static uint64_t my_device_address;
 
+#if MODULE_POWER
 static char *menu_items[] = {
         "Page 0",
         "LED Test",
@@ -84,7 +85,16 @@ static char *menu_items[] = {
         "Effect Rainbow cycle",
         "Effect Theater chase rainbow"
 };
+#define MAX_MENU_ITEMS 5
+#else
+static char *menu_items[] = {
+        "Page 0",
+        "LED Test"
+};
+#define MAX_MENU_ITEMS 2
+#endif
 
+#if MODULE_POWER
 static uint32_t _bc_module_power_led_strip_dma_buffer[LED_STRIP_COUNT * LED_STRIP_TYPE * 2];
 const bc_led_strip_buffer_t led_strip_buffer =
 {
@@ -130,11 +140,11 @@ static bc_module_relay_t relay_0_0;
 static bc_module_relay_t relay_0_1;
 
 static void led_strip_update_task(void *param);
+#endif
+
 static void radio_event_handler(bc_radio_event_t event, void *event_param);
 static void _radio_pub_state(uint8_t type, bool state);
-#else
 void battery_event_handler(bc_module_battery_event_t event, void *event_param);
-#endif //MODULE_POWER
 
 static void lcd_page_render();
 static void temperature_tag_init(bc_i2c_channel_t i2c_channel, bc_tag_temperature_i2c_address_t i2c_address, temperature_tag_t *tag);
@@ -257,10 +267,10 @@ void application_init(void)
     bc_module_pir_init(&pir);
     bc_module_pir_set_event_handler(&pir, pir_event_handler, NULL);
 
-#if MODULE_POWER
     bc_radio_listen();
     bc_radio_set_event_handler(radio_event_handler, NULL);
 
+#if MODULE_POWER
     bc_module_power_init();
     bc_led_strip_init(&led_strip.self, bc_module_power_get_led_strip_driver(), &led_strip_buffer);
 
@@ -333,12 +343,11 @@ static void lcd_page_render()
         bc_module_lcd_set_font(&bc_font_ubuntu_15);
         bc_module_lcd_draw_string(w, 85, pages[page_index].unit1, true);
     }
-#if MODULE_POWER
     else
     {
         bc_module_lcd_set_font(&bc_font_ubuntu_13);
 
-        for (int i = 0; i < 5; i++)
+        for (int i = 0; i < MAX_MENU_ITEMS; i++)
         {
             bc_module_lcd_draw_string(5, 5 + (i * 15), menu_items[i], i != menu_item);
         }
@@ -347,7 +356,11 @@ static void lcd_page_render()
         bc_module_lcd_draw_string(5, 115, "Down", true);
         bc_module_lcd_draw_string(90, 115, "Enter", true);
     }
-#endif
+
+    snprintf(str, sizeof(str), ":%s:", msg_buffer);
+    bc_module_lcd_set_font(&bc_font_ubuntu_13);
+    bc_module_lcd_draw_string(10, 100, str, true);
+
 
     snprintf(str, sizeof(str), "%d/%d", page_index + 1, MAX_PAGE_INDEX + 1);
     bc_module_lcd_set_font(&bc_font_ubuntu_13);
@@ -479,7 +492,7 @@ void lcd_button_event_handler(bc_button_t *self, bc_button_event_t event, void *
         {
             // Key menu down
             menu_item++;
-            if (menu_item == 5)
+            if (menu_item == MAX_MENU_ITEMS)
             {
                 menu_item = 0;
             }
@@ -699,7 +712,6 @@ void pir_event_handler(bc_module_pir_t *self, bc_module_pir_event_t event, void 
     }
 }
 
-#if MODULE_POWER
 static void radio_event_handler(bc_radio_event_t event, void *event_param)
 {
     (void) event_param;
@@ -717,9 +729,11 @@ static void radio_event_handler(bc_radio_event_t event, void *event_param)
     else if (event == BC_RADIO_EVENT_INIT_DONE)
     {
         my_device_address = bc_radio_get_device_address();
+        sprintf(msg_buffer, ">%" PRIx64, my_device_address);
     }
 }
 
+#if MODULE_POWER
 static void led_strip_update_task(void *param)
 {
     (void) param;
@@ -793,6 +807,7 @@ static void led_strip_update_task(void *param)
 
     bc_scheduler_plan_current_relative(250);
 }
+#endif
 
 void bc_radio_on_buffer(uint64_t *peer_device_address, uint8_t *buffer, size_t *length)
 {
@@ -806,6 +821,8 @@ void bc_radio_on_buffer(uint64_t *peer_device_address, uint8_t *buffer, size_t *
     uint8_t *pointer = buffer + sizeof(uint64_t) + 1;
 
     memcpy(&device_address, buffer + 1, sizeof(device_address));
+
+    sprintf(msg_buffer, "<%" PRIx64, device_address);
 
     if (device_address != my_device_address)
     {
@@ -824,6 +841,7 @@ void bc_radio_on_buffer(uint64_t *peer_device_address, uint8_t *buffer, size_t *
             _radio_pub_state(RADIO_LED, led_state);
             break;
         }
+#if MODULE_POWER
         case RADIO_RELAY_0_SET:
         case RADIO_RELAY_1_SET:
         {
@@ -991,6 +1009,7 @@ void bc_radio_on_buffer(uint64_t *peer_device_address, uint8_t *buffer, size_t *
             bc_scheduler_plan_now(led_strip.update_task_id);
             break;
         }
+#endif //MODULE_POWER
         case RADIO_LCD_TEXT_SET:
         {
             if (*length < (1 + sizeof(uint64_t) + 4 + 2))
@@ -1090,7 +1109,6 @@ static void _radio_pub_state(uint8_t type, bool state)
     buffer[1] = state;
     bc_radio_pub_buffer(buffer, sizeof(buffer));
 }
-#else
 
 void battery_event_handler(bc_module_battery_event_t event, void *event_param)
 {
@@ -1108,8 +1126,6 @@ void battery_event_handler(bc_module_battery_event_t event, void *event_param)
 #endif
     }
 }
-
-#endif // MODULE_POWER
 
 static void _radio_pub_u16(uint8_t type, uint16_t value)
 {
